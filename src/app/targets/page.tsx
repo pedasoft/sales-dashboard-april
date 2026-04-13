@@ -1,10 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { ColumnDef } from '@tanstack/react-table';
-import { useForm } from 'react-hook-form';
-import { z } from 'zod';
-import { zodResolver } from '@hookform/resolvers/zod';
 import { DataTable } from '@/components/common/DataTable';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
@@ -12,35 +9,39 @@ import { Modal } from '@/components/common/Modal';
 import { Select } from '@/components/common/Select';
 import { LoadingState } from '@/components/common/LoadingState';
 import { useAppStore } from '@/services/useAppStore';
-import { targetSchema } from '@/forms/schemas';
 import { deleteTarget, upsertTarget } from '@/services/db';
 import { askConfirm } from '@/components/common/Confirm';
 import { useToast } from '@/components/common/ToastProvider';
 import { downloadTargetTemplate, exportToExcel, parseExcelFile } from '@/utils/excel';
 import { MONTHS } from '@/lib/constants';
 import { Target } from '@/types/domain';
+import { formatMoney } from '@/lib/format';
+
+const MAX_MONTHLY_TARGET = 9_999_999;
+
+function parseSevenDigitCurrency(value: string) {
+  const digits = value.replace(/\D/g, '').slice(0, 7);
+  return digits ? Number(digits) : 0;
+}
+
+function formatThousand(value: number) {
+  return value > 0 ? value.toLocaleString('tr-TR') : '';
+}
 
 export default function TargetsPage() {
   const { loading, targets, salesManagers, productManagers, refreshAll } = useAppStore();
   const { push } = useToast();
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<Target | null>(null);
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
   const [filterMonth, setFilterMonth] = useState<number | 'all'>('all');
   const [filterType, setFilterType] = useState<'all' | 'sales' | 'product'>('all');
 
-  const form = useForm<z.infer<typeof targetSchema>>({
-    resolver: zodResolver(targetSchema),
-    defaultValues: {
-      year: new Date().getFullYear(),
-      month: new Date().getMonth() + 1,
-      manager_type: 'sales',
-      manager_id: '',
-      target_amount: 0
-    }
-  });
+  const [draftYear, setDraftYear] = useState(new Date().getFullYear());
+  const [draftType, setDraftType] = useState<'sales' | 'product'>('sales');
+  const [draftManagerId, setDraftManagerId] = useState('');
+  const [monthlyValues, setMonthlyValues] = useState<number[]>(Array.from({ length: 12 }, () => 0));
 
-  const managerOptions = form.watch('manager_type') === 'sales' ? salesManagers.filter((m) => m.is_active) : productManagers.filter((m) => m.is_active);
+  const managerOptions = draftType === 'sales' ? salesManagers.filter((m) => m.is_active) : productManagers.filter((m) => m.is_active);
 
   const rows = useMemo(
     () =>
@@ -57,6 +58,26 @@ export default function TargetsPage() {
         }),
     [targets, filterYear, filterMonth, filterType, salesManagers, productManagers]
   );
+
+  const existingYearTargets = useMemo(
+    () =>
+      targets.filter(
+        (target) =>
+          target.year === draftYear && target.manager_type === draftType && target.manager_id === draftManagerId
+      ),
+    [targets, draftYear, draftType, draftManagerId]
+  );
+
+  useEffect(() => {
+    if (!open || !draftManagerId) return;
+
+    const map = new Map<number, number>();
+    existingYearTargets.forEach((target) => map.set(target.month, Number(target.target_amount)));
+
+    setMonthlyValues(Array.from({ length: 12 }, (_, idx) => Math.min(map.get(idx + 1) || 0, MAX_MONTHLY_TARGET)));
+  }, [open, draftManagerId, existingYearTargets]);
+
+  const yearlyTotal = useMemo(() => monthlyValues.reduce((sum, value) => sum + value, 0), [monthlyValues]);
 
   const columns = useMemo<ColumnDef<(Target & { manager_name: string })>[]>(
     () => [
@@ -79,18 +100,13 @@ export default function TargetsPage() {
             <Button
               variant='ghost'
               onClick={() => {
-                setEditing(row.original);
-                form.reset({
-                  year: row.original.year,
-                  month: row.original.month,
-                  manager_type: row.original.manager_type,
-                  manager_id: row.original.manager_id,
-                  target_amount: row.original.target_amount
-                });
+                setDraftYear(row.original.year);
+                setDraftType(row.original.manager_type);
+                setDraftManagerId(row.original.manager_id);
                 setOpen(true);
               }}
             >
-              Düzenle
+              Yıllık Düzenle
             </Button>
             <Button
               variant='danger'
@@ -107,27 +123,33 @@ export default function TargetsPage() {
         )
       }
     ],
-    [form, push, refreshAll]
+    [push, refreshAll]
   );
 
-  const save = form.handleSubmit(async (values) => {
-    try {
-      await upsertTarget({
-        id: editing?.id,
-        year: values.year,
-        month: values.month,
-        manager_type: values.manager_type,
-        manager_id: values.manager_id,
-        target_amount: values.target_amount
-      });
-      await refreshAll();
-      push('Hedef kaydedildi', 'success');
-      setOpen(false);
-      setEditing(null);
-    } catch {
-      push('Kayıt başarısız', 'error');
+  const saveYearlyTargets = async () => {
+    if (!draftManagerId) {
+      push('Yönetici seçiniz', 'error');
+      return;
     }
-  });
+
+    try {
+      for (let month = 1; month <= 12; month++) {
+        await upsertTarget({
+          year: draftYear,
+          month,
+          manager_type: draftType,
+          manager_id: draftManagerId,
+          target_amount: monthlyValues[month - 1] || 0
+        });
+      }
+
+      await refreshAll();
+      push(existingYearTargets.length > 0 ? 'Yıllık hedef güncellendi' : 'Yıllık hedef kaydedildi', 'success');
+      setOpen(false);
+    } catch {
+      push('Hedef kaydı başarısız', 'error');
+    }
+  };
 
   const importExcel = async (file: File) => {
     const rows = await parseExcelFile(file);
@@ -189,7 +211,17 @@ export default function TargetsPage() {
           <option value='product'>Ürün</option>
         </Select>
         <div className='flex items-end gap-2'>
-          <Button onClick={() => setOpen(true)}>Yeni Hedef</Button>
+          <Button
+            onClick={() => {
+              setDraftYear(new Date().getFullYear());
+              setDraftType('sales');
+              setDraftManagerId('');
+              setMonthlyValues(Array.from({ length: 12 }, () => 0));
+              setOpen(true);
+            }}
+          >
+            Yeni Hedef
+          </Button>
           <Button variant='secondary' onClick={() => downloadTargetTemplate()}>
             Template İndir
           </Button>
@@ -232,30 +264,66 @@ export default function TargetsPage() {
 
       <DataTable data={rows} columns={columns} />
 
-      <Modal title={editing ? 'Hedef Düzenle' : 'Yeni Hedef'} open={open} onClose={() => setOpen(false)}>
-        <form className='grid grid-cols-1 gap-3 md:grid-cols-2' onSubmit={save}>
-          <Input type='number' label='Yıl' {...form.register('year')} error={form.formState.errors.year?.message} />
-          <Input type='number' min={1} max={12} label='Ay' {...form.register('month')} error={form.formState.errors.month?.message} />
-          <Select label='Tip' {...form.register('manager_type')} error={form.formState.errors.manager_type?.message}>
-            <option value='sales'>Satış</option>
-            <option value='product'>Ürün</option>
-          </Select>
-          <Select label='Yönetici' {...form.register('manager_id')} error={form.formState.errors.manager_id?.message}>
-            <option value=''>Seçiniz</option>
-            {managerOptions.map((manager) => (
-              <option key={manager.id} value={manager.id}>
-                {manager.name}
-              </option>
+      <Modal title='Yıllık Hedef Girişi' open={open} onClose={() => setOpen(false)}>
+        <div className='space-y-4'>
+          <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
+            <Input type='number' label='Yıl' value={draftYear} onChange={(e) => setDraftYear(Number(e.target.value || new Date().getFullYear()))} />
+            <Select label='Tip' value={draftType} onChange={(e) => setDraftType(e.target.value as 'sales' | 'product')}>
+              <option value='sales'>Satış</option>
+              <option value='product'>Ürün</option>
+            </Select>
+            <Select label='Yönetici' value={draftManagerId} onChange={(e) => setDraftManagerId(e.target.value)}>
+              <option value=''>Seçiniz</option>
+              {managerOptions.map((manager) => (
+                <option key={manager.id} value={manager.id}>
+                  {manager.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          {draftManagerId && existingYearTargets.length > 0 && (
+            <div className='rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900'>
+              Bu yönetici için {draftYear} yılında mevcut hedef kaydı var. Kaydet işlemi ikinci kayıt oluşturmaz, mevcut yıllık hedefi günceller.
+            </div>
+          )}
+
+          <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
+            {MONTHS.map((month, idx) => (
+              <label key={month} className='block text-sm'>
+                <span className='mb-1 block font-medium'>{month} (TL)</span>
+                <input
+                  className='w-full rounded-xl border border-slate-300 bg-panel px-3 py-2 outline-none ring-primary focus:ring-2'
+                  inputMode='numeric'
+                  value={formatThousand(monthlyValues[idx])}
+                  onChange={(e) => {
+                    const amount = Math.min(parseSevenDigitCurrency(e.target.value), MAX_MONTHLY_TARGET);
+                    setMonthlyValues((prev) => {
+                      const next = [...prev];
+                      next[idx] = amount;
+                      return next;
+                    });
+                  }}
+                  placeholder='0'
+                />
+              </label>
             ))}
-          </Select>
-          <Input type='number' label='Hedef Tutarı' {...form.register('target_amount')} error={form.formState.errors.target_amount?.message} />
-          <div className='flex items-end justify-end gap-2'>
+          </div>
+
+          <div className='rounded-xl border border-slate-200 bg-slate-50 p-3 text-right text-sm'>
+            <div className='font-medium text-muted'>Dip Toplam</div>
+            <div className='text-2xl font-black'>{formatMoney(yearlyTotal)}</div>
+          </div>
+
+          <div className='flex justify-end gap-2'>
             <Button variant='ghost' type='button' onClick={() => setOpen(false)}>
               İptal
             </Button>
-            <Button type='submit'>Kaydet</Button>
+            <Button type='button' onClick={saveYearlyTargets}>
+              Kaydet
+            </Button>
           </div>
-        </form>
+        </div>
       </Modal>
     </section>
   );
