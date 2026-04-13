@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import type { Route } from 'next';
 import { usePathname } from 'next/navigation';
 import clsx from 'clsx';
 
@@ -13,7 +14,7 @@ const menu = [
   { href: '/personal-dashboard', label: 'Kişisel Dashboard' },
   { href: '/commissions', label: 'Prim Yönetimi' },
   { href: '/settings', label: 'Ayarlar' }
-];
+] as const satisfies ReadonlyArray<{ href: Route; label: string }>;
 
 export function Sidebar() {
   const pathname = usePathname();

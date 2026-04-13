@@ -40,26 +40,31 @@ export default function CommissionsPage() {
     }
   });
 
-  const managerOptions = commissionForm.watch('manager_type') === 'sales' ? salesManagers.filter((m) => m.is_active) : productManagers.filter((m) => m.is_active);
+  const commissionType = commissionForm.watch('manager_type');
+  const commissionManagerId = commissionForm.watch('manager_id');
+  const commissionYear = commissionForm.watch('year');
+  const commissionMonth = commissionForm.watch('month');
+  const commissionMultiplier = commissionForm.watch('multiplier');
+  const commissionExtraAmount = commissionForm.watch('extra_amount');
+
+  const managerOptions = commissionType === 'sales' ? salesManagers.filter((m) => m.is_active) : productManagers.filter((m) => m.is_active);
 
   const actualAmount = useMemo(() => {
-    const values = commissionForm.getValues();
     return invoices
       .filter((inv) => {
         const date = new Date(inv.invoice_date);
-        const idMatch = values.manager_type === 'sales' ? inv.sales_manager_id === values.manager_id : inv.product_manager_id === values.manager_id;
-        return date.getFullYear() === values.year && date.getMonth() + 1 === values.month && idMatch;
+        const idMatch = commissionType === 'sales' ? inv.sales_manager_id === commissionManagerId : inv.product_manager_id === commissionManagerId;
+        return date.getFullYear() === commissionYear && date.getMonth() + 1 === commissionMonth && idMatch;
       })
       .reduce((sum, inv) => sum + Number(inv.amount), 0);
-  }, [commissionForm.watch(), invoices]);
+  }, [invoices, commissionType, commissionManagerId, commissionYear, commissionMonth]);
 
   const coefficient = useMemo(() => {
-    const values = commissionForm.getValues();
-    return coefficients.find((c) => c.manager_type === values.manager_type && c.manager_id === values.manager_id)?.coefficient || 0;
-  }, [coefficients, commissionForm.watch()]);
+    return coefficients.find((c) => c.manager_type === commissionType && c.manager_id === commissionManagerId)?.coefficient || 0;
+  }, [coefficients, commissionType, commissionManagerId]);
 
   const base = actualAmount * coefficient;
-  const total = base * Number(commissionForm.watch('multiplier') || 1) + Number(commissionForm.watch('extra_amount') || 0);
+  const total = base * Number(commissionMultiplier || 1) + Number(commissionExtraAmount || 0);
 
   const columns = useMemo<ColumnDef<(typeof commissions)[number]>[]>(
     () => [
@@ -94,7 +99,7 @@ export default function CommissionsPage() {
         )
       }
     ],
-    [commissions, salesManagers, productManagers, push, refreshAll]
+    [salesManagers, productManagers, push, refreshAll]
   );
 
   if (loading) return <LoadingState />;
