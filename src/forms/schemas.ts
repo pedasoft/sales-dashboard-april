@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { PRODUCTS } from '@/lib/constants';
+
+const PRODUCT_VALUES = ['bEAM', 'bEAM Cloud', 'QDMS', 'Synergy CSP', 'eBA Plus', 'Ensemble'] as const;
 
 export const managerSchema = z.object({
   name: z.string().min(1, 'İsim zorunlu').max(50, 'Maksimum 50 karakter')
@@ -16,7 +17,7 @@ export const targetSchema = z.object({
 export const invoiceSchema = z.object({
   invoice_date: z.string().min(1, 'Fatura tarihi zorunlu'),
   customer_name: z.string().min(1, 'Müşteri adı zorunlu').max(50, 'Maksimum 50 karakter'),
-  product: z.enum(PRODUCTS),
+  product: z.enum(PRODUCT_VALUES),
   amount: z.coerce.number().min(0, 'Negatif olamaz'),
   sales_manager_id: z.string().uuid('Satış yöneticisi zorunlu'),
   product_manager_id: z.string().uuid('Ürün yöneticisi zorunlu'),
