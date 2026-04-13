@@ -43,21 +43,59 @@ export default function TargetsPage() {
 
   const managerOptions = draftType === 'sales' ? salesManagers.filter((m) => m.is_active) : productManagers.filter((m) => m.is_active);
 
-  const rows = useMemo(
-    () =>
-      targets
-        .filter((target) => target.year === filterYear)
-        .filter((target) => (filterMonth === 'all' ? true : target.month === filterMonth))
-        .filter((target) => (filterType === 'all' ? true : target.manager_type === filterType))
-        .map((target) => {
-          const manager = target.manager_type === 'sales' ? salesManagers.find((m) => m.id === target.manager_id) : productManagers.find((m) => m.id === target.manager_id);
-          return {
-            ...target,
-            manager_name: manager?.name ?? 'Bilinmeyen'
-          };
-        }),
-    [targets, filterYear, filterMonth, filterType, salesManagers, productManagers]
-  );
+  const rows = useMemo(() => {
+    const filtered = targets
+      .filter((target) => target.year === filterYear)
+      .filter((target) => (filterType === 'all' ? true : target.manager_type === filterType));
+
+    const grouped = new Map<
+      string,
+      {
+        year: number;
+        manager_type: 'sales' | 'product';
+        manager_id: string;
+        manager_name: string;
+        annual_target: number;
+        monthly_targets: number[];
+        target_ids: string[];
+      }
+    >();
+
+    filtered.forEach((target) => {
+      const key = `${target.year}-${target.manager_type}-${target.manager_id}`;
+      const manager =
+        target.manager_type === 'sales'
+          ? salesManagers.find((m) => m.id === target.manager_id)
+          : productManagers.find((m) => m.id === target.manager_id);
+
+      const existing = grouped.get(key);
+      if (!existing) {
+        const monthly = Array.from({ length: 12 }, () => 0);
+        monthly[target.month - 1] = Number(target.target_amount);
+        grouped.set(key, {
+          year: target.year,
+          manager_type: target.manager_type,
+          manager_id: target.manager_id,
+          manager_name: manager?.name ?? 'Bilinmeyen',
+          annual_target: Number(target.target_amount),
+          monthly_targets: monthly,
+          target_ids: [target.id]
+        });
+        return;
+      }
+
+      existing.annual_target += Number(target.target_amount);
+      existing.monthly_targets[target.month - 1] = Number(target.target_amount);
+      existing.target_ids.push(target.id);
+    });
+
+    const consolidated = Array.from(grouped.values());
+    if (filterMonth !== 'all') {
+      return consolidated.filter((row) => row.monthly_targets[filterMonth - 1] > 0);
+    }
+
+    return consolidated;
+  }, [targets, filterYear, filterType, filterMonth, salesManagers, productManagers]);
 
   const existingYearTargets = useMemo(
     () =>
@@ -79,16 +117,26 @@ export default function TargetsPage() {
 
   const yearlyTotal = useMemo(() => monthlyValues.reduce((sum, value) => sum + value, 0), [monthlyValues]);
 
-  const columns = useMemo<ColumnDef<(Target & { manager_name: string })>[]>(
+  const columns = useMemo<
+    ColumnDef<{
+      year: number;
+      manager_type: 'sales' | 'product';
+      manager_id: string;
+      manager_name: string;
+      annual_target: number;
+      monthly_targets: number[];
+      target_ids: string[];
+    }>[]
+  >(
     () => [
       { header: 'Yıl', accessorKey: 'year' },
-      { header: 'Ay', cell: ({ row }) => MONTHS[row.original.month - 1] },
+      { header: 'Ay', cell: () => 'Yıllık (12 Ay)' },
       { header: 'Tip', cell: ({ row }) => (row.original.manager_type === 'sales' ? 'Satış' : 'Ürün') },
       { header: 'Yönetici', accessorKey: 'manager_name' },
       {
         header: 'Hedef',
         cell: ({ row }) =>
-          Number(row.original.target_amount).toLocaleString('tr-TR', {
+          Number(row.original.annual_target).toLocaleString('tr-TR', {
             style: 'currency',
             currency: 'TRY'
           })
@@ -111,10 +159,10 @@ export default function TargetsPage() {
             <Button
               variant='danger'
               onClick={async () => {
-                if (!askConfirm('Kayıt silinsin mi?')) return;
-                await deleteTarget(row.original.id);
+                if (!askConfirm('Bu yöneticinin seçili yıldaki tüm aylık hedef kayıtları silinsin mi?')) return;
+                await Promise.all(row.original.target_ids.map((id) => deleteTarget(id)));
                 await refreshAll();
-                push('Hedef silindi', 'success');
+                push('Yıllık hedef silindi', 'success');
               }}
             >
               Sil
@@ -249,10 +297,21 @@ export default function TargetsPage() {
             exportToExcel(
               rows.map((row) => ({
                 year: row.year,
-                month: row.month,
                 manager_type: row.manager_type,
                 manager_name: row.manager_name,
-                target_amount: row.target_amount
+                annual_target_amount: row.annual_target,
+                jan: row.monthly_targets[0],
+                feb: row.monthly_targets[1],
+                mar: row.monthly_targets[2],
+                apr: row.monthly_targets[3],
+                may: row.monthly_targets[4],
+                jun: row.monthly_targets[5],
+                jul: row.monthly_targets[6],
+                aug: row.monthly_targets[7],
+                sep: row.monthly_targets[8],
+                oct: row.monthly_targets[9],
+                nov: row.monthly_targets[10],
+                dec: row.monthly_targets[11]
               })),
               'targets-export'
             )
